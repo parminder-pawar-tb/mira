@@ -45,7 +45,9 @@ from mira.providers import create_provider
 
 logger = logging.getLogger(__name__)
 
-_PR_ACTIONS = {"opened", "synchronize", "reopened"}
+# `ready_for_review`: a draft marked ready. Behind Harmony Engine a draft's `opened` is never
+# forwarded, so this is the first delivery Mira sees for that pull request.
+_PR_ACTIONS = {"opened", "synchronize", "reopened", "ready_for_review"}
 _PR_MERGE_ACTIONS = {"closed"}
 
 

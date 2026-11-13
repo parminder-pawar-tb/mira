@@ -571,3 +571,24 @@ async def test_comment_case_insensitive_review_dispatches(
     result = await _post(client, "issue_comment", payload)
     assert result["status"] == "processing"
     mock_handler.assert_awaited_once()
+
+
+@patch("mira.platforms.github.webhook.handle_pull_request", new_callable=AsyncMock)
+async def test_pr_ready_for_review_triggers_handler(
+    mock_handler: AsyncMock, client: AsyncClient
+) -> None:
+    """A draft marked ready is reviewed: with Harmony in front, a draft's `opened` is never
+    forwarded, so `ready_for_review` is the first delivery Mira sees for it."""
+    payload_bytes = json.dumps(_make_pr_payload(action="ready_for_review")).encode()
+    resp = await client.post(
+        "/webhook",
+        content=payload_bytes,
+        headers={
+            "X-Hub-Signature-256": _sign(payload_bytes),
+            "X-GitHub-Event": "pull_request",
+            "Content-Type": "application/json",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "processing"
+    mock_handler.assert_awaited_once()

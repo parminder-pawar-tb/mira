@@ -739,3 +739,108 @@ async def test_thread_reply_disagreement_skips_mutations_when_reject_denied():
     # ... but the denied ``reject`` must not resolve the thread or record feedback.
     provider.resolve_threads.assert_not_awaited()
     store.record_feedback.assert_not_called()
+
+
+# ── Harmony Engine callback wiring ───────────────────────────────────────────
+
+
+async def _run_pr_handler_with_harmony(
+    result: ReviewResult | Exception,
+    mock_engine_cls: MagicMock,
+    mock_app_auth: AsyncMock,
+    pr_info: PRInfo,
+    report: AsyncMock,
+) -> AsyncMock:
+    """Drive handle_pull_request with ``mira.harmony.report_review`` replaced by ``report``;
+    returns the patched outbound dispatch mock."""
+    mock_engine = AsyncMock()
+    if isinstance(result, Exception):
+        mock_engine.review_pr = AsyncMock(side_effect=result)
+    else:
+        mock_engine.review_pr = AsyncMock(return_value=result)
+    mock_engine._pr_info = pr_info
+    mock_engine_cls.return_value = mock_engine
+
+    with (
+        patch("mira.dashboard.api._app_db") as mock_db,
+        patch("mira.outbound_webhooks.dispatch_event", new_callable=AsyncMock) as mock_dispatch,
+        patch("mira.harmony.report_review", new=report),
+    ):
+        mock_db.get_repo.return_value = MagicMock(status="ready")
+        await handle_pull_request(_make_pr_payload(), mock_app_auth, "mira-bot")
+    return mock_dispatch
+
+
+@patch("mira.platforms.handlers.ReviewEngine")
+@patch("mira.platforms.github.webhook.create_provider")
+@patch("mira.platforms.handlers.create_llm")
+@patch("mira.platforms.handlers.load_config")
+async def test_finished_review_is_reported_to_harmony(
+    mock_config: MagicMock,
+    mock_llm_cls: MagicMock,
+    mock_provider_cls: MagicMock,
+    mock_engine_cls: MagicMock,
+    mock_app_auth: AsyncMock,
+    mock_pr_info: PRInfo,
+) -> None:
+    mock_config.return_value = MagicMock()
+    mock_pr_info.head_sha = "f" * 40
+    result = ReviewResult(summary="ok")
+    report = AsyncMock(return_value=True)
+
+    await _run_pr_handler_with_harmony(result, mock_engine_cls, mock_app_auth, mock_pr_info, report)
+
+    report.assert_awaited_once()
+    kwargs = report.await_args.kwargs
+    assert kwargs["result"] is result
+    assert kwargs["platform"] == "github"
+    assert kwargs["repo"] == "testowner/testrepo"
+    assert kwargs["number"] == 42
+    assert kwargs["head_sha"] == "f" * 40
+    assert kwargs["llm"] is mock_llm_cls.return_value
+
+
+@patch("mira.platforms.handlers.ReviewEngine")
+@patch("mira.platforms.github.webhook.create_provider")
+@patch("mira.platforms.handlers.create_llm")
+@patch("mira.platforms.handlers.load_config")
+async def test_harmony_report_failure_does_not_fail_the_review(
+    mock_config: MagicMock,
+    mock_llm_cls: MagicMock,
+    mock_provider_cls: MagicMock,
+    mock_engine_cls: MagicMock,
+    mock_app_auth: AsyncMock,
+    mock_pr_info: PRInfo,
+) -> None:
+    mock_config.return_value = MagicMock()
+    report = AsyncMock(side_effect=RuntimeError("harmony exploded"))
+
+    dispatch = await _run_pr_handler_with_harmony(
+        ReviewResult(summary="ok"), mock_engine_cls, mock_app_auth, mock_pr_info, report
+    )
+
+    report.assert_awaited_once()
+    assert "review.completed" in _events(dispatch)
+    assert "review.failed" not in _events(dispatch)
+
+
+@patch("mira.platforms.handlers.ReviewEngine")
+@patch("mira.platforms.github.webhook.create_provider")
+@patch("mira.platforms.handlers.create_llm")
+@patch("mira.platforms.handlers.load_config")
+async def test_failed_review_is_not_reported_to_harmony(
+    mock_config: MagicMock,
+    mock_llm_cls: MagicMock,
+    mock_provider_cls: MagicMock,
+    mock_engine_cls: MagicMock,
+    mock_app_auth: AsyncMock,
+    mock_pr_info: PRInfo,
+) -> None:
+    mock_config.return_value = MagicMock()
+    report = AsyncMock(return_value=True)
+
+    await _run_pr_handler_with_harmony(
+        RuntimeError("review exploded"), mock_engine_cls, mock_app_auth, mock_pr_info, report
+    )
+
+    report.assert_not_awaited()

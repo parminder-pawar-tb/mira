@@ -162,6 +162,23 @@ async def run_pr_review(
 
     logger.info("Review complete for %s", pr_url)
 
+    # Behind Harmony Engine: write the business impact and report it (no-op unless the
+    # callback is configured). On the indexing tier: a short summary, not a review.
+    from mira import harmony
+
+    reviewed_pr = getattr(engine, "_pr_info", None)
+    try:
+        await harmony.report_review(
+            llm=indexing_llm,
+            result=result,
+            platform=platform,
+            repo=repo_full,
+            number=number,
+            head_sha=getattr(reviewed_pr, "head_sha", "") or "",
+        )
+    except Exception as exc:  # noqa: BLE001 - a callback must never fail a finished review
+        logger.warning("Harmony callback raised for %s: %s", pr_url, type(exc).__name__)
+
     from mira.models import Severity, build_review_stats
     from mira.outbound_webhooks import (
         REVIEW_COMPLETED,
