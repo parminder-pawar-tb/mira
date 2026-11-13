@@ -592,3 +592,78 @@ async def test_pr_ready_for_review_triggers_handler(
     assert resp.status_code == 200
     assert resp.json()["status"] == "processing"
     mock_handler.assert_awaited_once()
+
+
+# ── Behind Harmony Engine: pull requests opened by the shared App's own bot ──
+
+
+def _own_bot_pr_payload(action: str = "opened") -> dict:
+    payload = _make_pr_payload(action=action)
+    payload["sender"] = {"login": f"{BOT_NAME}[bot]"}
+    return payload
+
+
+async def _post_pr(client: AsyncClient, payload: dict):  # noqa: ANN202
+    payload_bytes = json.dumps(payload).encode()
+    return await client.post(
+        "/webhook",
+        content=payload_bytes,
+        headers={
+            "X-Hub-Signature-256": _sign(payload_bytes),
+            "X-GitHub-Event": "pull_request",
+            "Content-Type": "application/json",
+        },
+    )
+
+
+@patch("mira.platforms.github.webhook.handle_pull_request", new_callable=AsyncMock)
+async def test_own_bot_pr_is_ignored_on_a_standalone_mira(
+    mock_handler: AsyncMock, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("MIRA_HARMONY_CALLBACK_URL", raising=False)
+    monkeypatch.delenv("MIRA_HARMONY_CALLBACK_SECRET", raising=False)
+    resp = await _post_pr(client, _own_bot_pr_payload())
+    assert resp.json()["status"] == "ignored"
+    mock_handler.assert_not_awaited()
+
+
+@pytest.mark.parametrize("action", ["opened", "synchronize", "reopened", "ready_for_review"])
+@patch("mira.platforms.github.webhook.handle_pull_request", new_callable=AsyncMock)
+async def test_own_bot_pr_is_reviewed_behind_harmony(
+    mock_handler: AsyncMock,
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+) -> None:
+    """Harmony shares the GitHub App with Mira, so a pull request Harmony opens (a fix, an
+    accepted task) is authored by Mira's own bot account. It is still someone else's code
+    and gets a review."""
+    monkeypatch.setenv("MIRA_HARMONY_CALLBACK_URL", "https://harmony.example.test/api/webhook/mira")
+    monkeypatch.setenv("MIRA_HARMONY_CALLBACK_SECRET", "callback-secret-for-tests")
+    resp = await _post_pr(client, _own_bot_pr_payload(action))
+    assert resp.json()["status"] == "processing"
+    mock_handler.assert_awaited_once()
+
+
+@patch("mira.platforms.github.webhook.handle_comment", new_callable=AsyncMock)
+async def test_own_bot_comment_is_still_ignored_behind_harmony(
+    mock_handler: AsyncMock, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The loop guard that matters stays: Mira never answers its own comments, and Harmony's
+    comments come from the same bot account."""
+    monkeypatch.setenv("MIRA_HARMONY_CALLBACK_URL", "https://harmony.example.test/api/webhook/mira")
+    monkeypatch.setenv("MIRA_HARMONY_CALLBACK_SECRET", "callback-secret-for-tests")
+    payload = _comment_payload(f"@{BOT_NAME} review")
+    payload["comment"]["user"] = {"login": f"{BOT_NAME}[bot]", "type": "Bot"}
+    payload_bytes = json.dumps(payload).encode()
+    resp = await client.post(
+        "/webhook",
+        content=payload_bytes,
+        headers={
+            "X-Hub-Signature-256": _sign(payload_bytes),
+            "X-GitHub-Event": "issue_comment",
+            "Content-Type": "application/json",
+        },
+    )
+    assert resp.json()["status"] == "ignored"
+    mock_handler.assert_not_awaited()

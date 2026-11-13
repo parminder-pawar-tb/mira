@@ -15,6 +15,7 @@ from typing import Any
 
 from fastapi import BackgroundTasks
 
+from mira import harmony
 from mira.config import load_config
 from mira.index.indexer import _should_index
 from mira.index.store import IndexStore
@@ -480,7 +481,10 @@ async def dispatch_github_event(
 
     if event == "pull_request" and action in _PR_ACTIONS:
         sender = payload.get("sender", {}).get("login", "")
-        if sender == f"{bot_name}[bot]":
+        # Mira opens no pull requests and pushes no commits, so on its own a delivery from
+        # its bot is noise. Behind Harmony Engine the same bot account is Harmony's: a pull
+        # request it opens is Harmony's code change and gets a review like any other.
+        if sender == f"{bot_name}[bot]" and not harmony.shares_github_app():
             logger.debug("Ignoring pull_request event from self (%s)", sender)
             return "ignored"
 

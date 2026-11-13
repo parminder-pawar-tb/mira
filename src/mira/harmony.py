@@ -90,6 +90,15 @@ def callback_target() -> tuple[str, str] | None:
     return None
 
 
+def shares_github_app() -> bool:
+    """Whether Mira runs behind Harmony Engine, sharing its GitHub App.
+
+    True when the callback is configured. Then the bot account is also Harmony's, and the
+    pull requests it opens are reviewed instead of being ignored as Mira's own.
+    """
+    return callback_target() is not None
+
+
 def changes_summary(result: ReviewResult) -> str:
     """The walkthrough's per-file notes as markdown, one ``### path`` section per file."""
     walkthrough = result.walkthrough

@@ -278,3 +278,9 @@ async def test_the_log_never_holds_the_secret_or_the_text(caplog: pytest.LogCapt
     await _report(FakeTransport(status=401))
     assert SECRET not in caplog.text
     assert "Totals include tax" not in caplog.text
+
+
+def test_shares_github_app_follows_the_callback_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert harmony.shares_github_app() is True
+    monkeypatch.delenv("MIRA_HARMONY_CALLBACK_SECRET")
+    assert harmony.shares_github_app() is False
